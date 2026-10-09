@@ -323,7 +323,7 @@ def read_command_message(command: dict) -> str:
     embedded = re.search(r"\{.*\}", message, re.DOTALL)
     if embedded:
         with suppress(ValueError, KeyError, TypeError):
-            return json.loads(embedded.group())["message"]
+            return json.loads(embedded.group())["message"].strip()
     return message
 
 

@@ -30,3 +30,11 @@ pip install -e ".[dev]"
 ruff check src/ tests/
 pytest
 ```
+
+The integration tests are skipped unless `ARMADILLO_URL` is set. To run them, start an Armadillo with a Rock profile that has dsBase installed, then:
+
+```bash
+ARMADILLO_URL=http://localhost:8080 ADMIN_PASSWORD=admin PROFILE=default pytest -m integration
+```
+
+They create a project with a small generated table, and delete it afterwards.

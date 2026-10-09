@@ -29,6 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "datashield-base>=0.1.1; python_version >= '3.11'",
   "pytest>=7.0.0",
   "pytest-cov>=4.0.0",
   "responses>=0.25",
@@ -46,6 +47,9 @@ Source = "https://github.com/molgenis/datashield-armadillo-python"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "integration: needs a running Armadillo, see README (deselect with '-m \"not integration\"')",
+]
 
 [tool.ruff]
 target-version = "py310"

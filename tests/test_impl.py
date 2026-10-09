@@ -244,7 +244,7 @@ def test_synchronous_aggregate_returns_result_without_polling():
 def test_fetch_raises_message_of_failed_command():
     conn = connect_with_session()
     responses.post(f"{URL}/execute", status=201)
-    message = '500 Internal Server Error: "{"status":"BAD_REQUEST","message":"object not found"}"'
+    message = '400 Bad Request: "{"status":"400","key":"REvaluationRuntimeException","message":"object not found\\n"}"'
     responses.get(f"{URL}/lastcommand", json=last_command("FAILED", message=message))
     result = conn.aggregate("meanDS(D$age)")
     with pytest.raises(ArmadilloDSError, match=r"Command 'meanDS\(D\$age\)' failed on server1: object not found"):
