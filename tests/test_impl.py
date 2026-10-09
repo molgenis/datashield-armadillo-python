@@ -258,3 +258,114 @@ def test_assign_table_raises_server_message_for_unknown_table():
     with pytest.raises(ArmadilloDSError, match="has no object") as raised:
         conn.assign_table("D", "project/folder/x")
     assert raised.value.code == 404
+
+
+def ds_method(name, package, version):
+    return {"name": name, "function": f"{package}::{name}", "package": package, "version": version}
+
+
+@responses.activate
+def test_list_symbols_starts_session():
+    conn = connect_with_session()
+    responses.get(f"{URL}/symbols", json=["D", "x"])
+    assert conn.list_symbols() == ["D", "x"]
+    assert conn.has_session()
+
+
+@responses.activate
+def test_rm_symbol():
+    conn = connect_with_session()
+    remove = responses.delete(f"{URL}/symbols/D", status=200)
+    conn.rm_symbol("D")
+    assert remove.call_count == 1
+
+
+@responses.activate
+def test_list_profiles():
+    conn = connect()
+    profiles = {"available": ["default", "xenon"], "current": "default"}
+    responses.get(f"{URL}/profiles", json=profiles)
+    assert conn.list_profiles() == profiles
+
+
+@responses.activate
+def test_list_methods():
+    conn = connect()
+    responses.get(f"{URL}/methods/assign", json=[ds_method("asNumericDS", "dsBase", "6.3.5")])
+    assert conn.list_methods("assign") == [
+        {"name": "asNumericDS", "class": "func", "value": "dsBase::asNumericDS", "pkg": "dsBase", "version": "6.3.5"}
+    ]
+
+
+@responses.activate
+def test_list_packages_lists_each_method_package_once():
+    conn = connect()
+    aggregate = [ds_method("meanDS", "dsBase", "6.3.5"), ds_method("filterDS", "dsTidyverse", "1.2.1")]
+    responses.get(f"{URL}/methods/aggregate", json=aggregate)
+    responses.get(f"{URL}/methods/assign", json=[ds_method("asNumericDS", "dsBase", "6.3.5")])
+    assert conn.list_packages() == [
+        {"pkg": "dsBase", "version": "6.3.5"},
+        {"pkg": "dsTidyverse", "version": "1.2.1"},
+    ]
+
+
+@responses.activate
+def test_list_workspaces():
+    conn = connect()
+    workspaces = [{"name": "server1:saved", "lastModified": "2026-10-09T10:00:00Z", "size": 1024}]
+    responses.get(f"{URL}/workspaces", json=workspaces)
+    assert conn.list_workspaces() == workspaces
+
+
+@responses.activate
+def test_save_workspace():
+    conn = connect_with_session()
+    save = responses.post(f"{URL}/workspaces/server1%3Asaved", status=201)
+    conn.save_workspace("server1:saved")
+    assert save.call_count == 1
+
+
+@responses.activate
+def test_restore_workspace_starts_session():
+    conn = connect_with_session()
+    restore = responses.post(
+        f"{URL}/load-workspace", status=200, match=[matchers.query_param_matcher({"id": "server1:saved"})]
+    )
+    conn.restore_workspace("server1:saved")
+    assert restore.call_count == 1
+    assert conn.has_session()
+
+
+@responses.activate
+def test_rm_workspace_ignores_missing_workspace():
+    conn = connect()
+    responses.delete(f"{URL}/workspaces/gone", status=404)
+    conn.rm_workspace("gone")
+
+
+@responses.activate
+def test_rm_workspace_raises_other_errors():
+    conn = connect()
+    responses.delete(f"{URL}/workspaces/saved", status=500, json={"message": "storage unavailable"})
+    with pytest.raises(ArmadilloDSError, match="storage unavailable"):
+        conn.rm_workspace("saved")
+
+
+@responses.activate
+def test_all_operations_are_asynchronous():
+    assert all(connect().is_async().values())
+
+
+@responses.activate
+def test_keep_alive_does_not_touch_the_r_session():
+    conn = connect()
+    info = responses.get(f"{URL}/actuator/info", json={})
+    conn.keep_alive()
+    assert info.call_count == 1
+    assert not conn.has_session()
+
+
+@responses.activate
+def test_keep_alive_ignores_failures():
+    conn = connect()
+    conn.keep_alive()

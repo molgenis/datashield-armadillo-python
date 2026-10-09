@@ -107,7 +107,7 @@ class ArmadilloConnection(DSConnection):
             return self.rsession
         self._select_profile()
         if self.restore is not None:
-            self.restore_workspace(self.restore)
+            self._load_workspace(self.restore)
         self.rsession = ArmadilloRSession(self.profile)
         return self.rsession
 
@@ -155,8 +155,48 @@ class ArmadilloConnection(DSConnection):
         if command.get("status") == "FAILED":
             raise ArmadilloDSError(describe_failed_command(command, self.name))
 
+    def list_symbols(self) -> list:
+        self.start_session()
+        return self._send_checked("GET", "/symbols").json()
+
+    def rm_symbol(self, name: str) -> None:
+        self.start_session()
+        self._send_checked("DELETE", f"/symbols/{quote(name, safe='')}")
+
+    def list_profiles(self) -> list:
+        return self._send_checked("GET", "/profiles").json()
+
+    def list_methods(self, type: str = "aggregate") -> list:
+        methods = self._send_checked("GET", f"/methods/{quote(type, safe='')}").json()
+        return [describe_method(method) for method in methods]
+
+    def list_packages(self) -> list:
+        methods = self.list_methods("aggregate") + self.list_methods("assign")
+        versions = {method["pkg"]: method["version"] for method in methods if method["pkg"]}
+        return [{"pkg": pkg, "version": version} for pkg, version in sorted(versions.items())]
+
+    def list_workspaces(self) -> list:
+        return self._send_checked("GET", "/workspaces").json()
+
+    def save_workspace(self, name: str) -> None:
+        self.start_session()
+        self._send_checked("POST", f"/workspaces/{quote(name, safe='')}")
+
     def restore_workspace(self, name: str) -> None:
-        self._send_checked("POST", "/load-workspace", params={"id": name})
+        self.start_session()
+        self._load_workspace(name)
+
+    def rm_workspace(self, name: str) -> None:
+        response = self._send("DELETE", f"/workspaces/{quote(name, safe='')}")
+        if response.status_code != 404:
+            raise_for_error(response)
+
+    def is_async(self) -> dict:
+        return {"aggregate": True, "assign_table": True, "assign_resource": True, "assign_expr": True}
+
+    def keep_alive(self) -> None:
+        with suppress(ArmadilloDSError):
+            self._send("GET", "/actuator/info")
 
     def disconnect(self) -> None:
         if self.rsession is not None:
@@ -175,6 +215,9 @@ class ArmadilloConnection(DSConnection):
         if asynchronous:
             return ArmadilloResult(self, pending=True)
         return ArmadilloResult(self, pending=False, result=read_json_body(response))
+
+    def _load_workspace(self, name: str) -> None:
+        self._send_checked("POST", "/load-workspace", params={"id": name})
 
     def _select_profile(self) -> None:
         response = self._send("POST", "/select-profile", data=self.profile, headers={"Content-Type": "text/plain"})
@@ -248,6 +291,16 @@ def raise_for_error(response: requests.Response) -> None:
 
 def read_json_body(response: requests.Response) -> object:
     return response.json() if response.content else None
+
+
+def describe_method(method: dict) -> dict:
+    return {
+        "name": method.get("name"),
+        "class": "func",
+        "value": method.get("function"),
+        "pkg": method.get("package"),
+        "version": method.get("version"),
+    }
 
 
 def describe_failed_command(command: dict, server: str) -> str:
