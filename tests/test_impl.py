@@ -31,8 +31,17 @@ def test_user_and_password_are_sent_as_basic_auth():
 @responses.activate
 def test_connection_fails_when_not_authenticated():
     responses.get(f"{URL}/my/principal", status=401)
-    with pytest.raises(ArmadilloDSError, match="Failed to authenticate"):
+    with pytest.raises(ArmadilloDSError, match="run 'datashield-armadillo-login server1'"):
         ArmadilloDriver.new_connection(DSLoginInfo(name="server1", url=URL, driver=DRIVER, token="expired"))
+
+
+@responses.activate
+def test_expired_token_during_session_points_to_login_command():
+    conn = connect()
+    responses.get(f"{URL}/tables", status=401)
+    with pytest.raises(ArmadilloDSError, match="run 'datashield-armadillo-login server1'") as raised:
+        conn.list_tables()
+    assert raised.value.code == 401
 
 
 @responses.activate

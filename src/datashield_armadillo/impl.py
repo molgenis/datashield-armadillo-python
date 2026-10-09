@@ -189,7 +189,7 @@ class ArmadilloConnection(DSConnection):
     def rm_workspace(self, name: str) -> None:
         response = self._send("DELETE", f"/workspaces/{quote(name, safe='')}")
         if response.status_code != 404:
-            raise_for_error(response)
+            self._raise_for_error(response)
 
     def is_async(self) -> dict:
         return {"aggregate": True, "assign_table": True, "assign_resource": True, "assign_expr": True}
@@ -211,7 +211,7 @@ class ArmadilloConnection(DSConnection):
         response = self._send("POST", path, params=query, **kwargs)
         if response.status_code >= 500:
             self.raise_if_command_failed(self.read_last_command())
-        raise_for_error(response)
+        self._raise_for_error(response)
         if asynchronous:
             return ArmadilloResult(self, pending=True)
         return ArmadilloResult(self, pending=False, result=read_json_body(response))
@@ -223,6 +223,11 @@ class ArmadilloConnection(DSConnection):
         response = self._send("POST", "/select-profile", data=self.profile, headers={"Content-Type": "text/plain"})
         if response.status_code == 404:
             raise ArmadilloDSError(f"Profile not found: '{self.profile}'", 404)
+        self._raise_for_error(response)
+
+    def _raise_for_error(self, response: requests.Response) -> None:
+        if response.status_code == 401:
+            raise ArmadilloDSError(describe_login_failure(self.name), 401, response.text)
         raise_for_error(response)
 
     def _send(self, method: str, path: str, **kwargs) -> requests.Response:
@@ -233,7 +238,7 @@ class ArmadilloConnection(DSConnection):
 
     def _send_checked(self, method: str, path: str, **kwargs) -> requests.Response:
         response = self._send(method, path, **kwargs)
-        raise_for_error(response)
+        self._raise_for_error(response)
         return response
 
 
@@ -270,8 +275,7 @@ class ArmadilloDriver(DSDriver):
     def new_connection(cls, args: DSLoginInfo, restore: str | None = None) -> DSConnection:
         conn = ArmadilloConnection(args.name, args.url, open_http_session(args), args.profile, restore)
         if not conn.check_user():
-            creds = f"user {args.user}" if args.user else "token"
-            raise ArmadilloDSError(f"Failed to authenticate on {args.url} with {creds}")
+            raise ArmadilloDSError(describe_login_failure(args.name), 401)
         return conn
 
 
@@ -282,6 +286,13 @@ def open_http_session(args: DSLoginInfo) -> requests.Session:
     else:
         http.auth = (args.user, args.password)
     return http
+
+
+def describe_login_failure(server: str) -> str:
+    return (
+        f"Failed to authenticate on {server}. "
+        f"If you log in with a token it may have expired: run 'datashield-armadillo-login {server}'"
+    )
 
 
 def raise_for_error(response: requests.Response) -> None:

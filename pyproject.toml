@@ -22,6 +22,8 @@ classifiers = [
 ]
 dependencies = [
   "datashield>=0.5.1",
+  "molgenis-auth @ git+https://github.com/molgenis/molgenis-python-auth.git",
+  "pyyaml",
   "requests",
 ]
 
@@ -32,6 +34,9 @@ dev = [
   "responses>=0.25",
   "ruff>=0.4.0",
 ]
+
+[project.scripts]
+datashield-armadillo-login = "datashield_armadillo.login:main"
 
 [project.urls]
 Documentation = "https://github.com/molgenis/datashield-armadillo-python#readme"
@@ -64,3 +69,6 @@ exclude_lines = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/datashield_armadillo"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

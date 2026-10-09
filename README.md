@@ -15,6 +15,14 @@ servers:
     driver: datashield_armadillo.ArmadilloDriver
 ```
 
+To log in with your institute account, run the login command. It opens a browser, and saves the access token for the server in `~/.config/datashield/config.yaml`:
+
+```bash
+datashield-armadillo-login armadillo1 --url https://armadillo.example.org
+```
+
+Run it again when the token has expired; `--url` is only needed the first time.
+
 ## Development
 
 ```bash
