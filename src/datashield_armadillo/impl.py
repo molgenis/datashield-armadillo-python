@@ -2,13 +2,20 @@
 DataSHIELD Interface implementation for MOLGENIS Armadillo.
 """
 
+import json
+import re
+import time
 from contextlib import suppress
 from urllib.parse import quote
 
 import requests
-from datashield.interface import DSConnection, DSDriver, DSError, DSLoginInfo, RSession
+from datashield.interface import DSConnection, DSDriver, DSError, DSLoginInfo, DSResult, RSession
 
 REQUEST_TIMEOUT_SECONDS = 300
+POLL_INTERVAL_SECONDS = 0.1
+FINISHED_STATUSES = ("COMPLETED", "FAILED")
+TEXT_PLAIN = {"Content-Type": "text/plain"}
+ACCEPT_JSON = {"Accept": "application/json"}
 
 
 class ArmadilloDSError(DSError):
@@ -112,6 +119,42 @@ class ArmadilloConnection(DSConnection):
             raise ArmadilloDSError("No R session established. Please start a session first.")
         return self.rsession
 
+    def assign_table(
+        self,
+        symbol: str,
+        table: str,
+        variables: list | None = None,
+        missings: bool = False,
+        identifiers: str | None = None,
+        id_name: str | None = None,
+        asynchronous: bool = True,
+    ) -> DSResult:
+        params = {"symbol": symbol, "table": table}
+        if variables is not None:
+            params["variables"] = ",".join(variables)
+        return self._run_command("/load-table", asynchronous, params=params)
+
+    def assign_resource(self, symbol: str, resource: str, asynchronous: bool = True) -> DSResult:
+        return self._run_command("/load-resource", asynchronous, params={"symbol": symbol, "resource": resource})
+
+    def assign_expr(self, symbol: str, expr: str, asynchronous: bool = True) -> DSResult:
+        path = f"/symbols/{quote(symbol, safe='')}"
+        return self._run_command(path, asynchronous, data=expr.encode("utf-8"), headers=TEXT_PLAIN)
+
+    def aggregate(self, expr: str, asynchronous: bool = True) -> DSResult:
+        headers = {**TEXT_PLAIN, **ACCEPT_JSON}
+        return self._run_command("/execute", asynchronous, data=expr.encode("utf-8"), headers=headers)
+
+    def read_last_command(self) -> dict:
+        return self._send_checked("GET", "/lastcommand").json()
+
+    def read_last_result(self) -> object:
+        return read_json_body(self._send_checked("GET", "/lastresult", headers=ACCEPT_JSON))
+
+    def raise_if_command_failed(self, command: dict) -> None:
+        if command.get("status") == "FAILED":
+            raise ArmadilloDSError(describe_failed_command(command, self.name))
+
     def restore_workspace(self, name: str) -> None:
         self._send_checked("POST", "/load-workspace", params={"id": name})
 
@@ -121,6 +164,17 @@ class ArmadilloConnection(DSConnection):
         with suppress(ArmadilloDSError):
             self._send("POST", "/logout")
         self.http.close()
+
+    def _run_command(self, path: str, asynchronous: bool, params: dict | None = None, **kwargs) -> DSResult:
+        self.start_session()
+        query = {**(params or {}), "async": "true" if asynchronous else "false"}
+        response = self._send("POST", path, params=query, **kwargs)
+        if response.status_code >= 500:
+            self.raise_if_command_failed(self.read_last_command())
+        raise_for_error(response)
+        if asynchronous:
+            return ArmadilloResult(self, pending=True)
+        return ArmadilloResult(self, pending=False, result=read_json_body(response))
 
     def _select_profile(self) -> None:
         response = self._send("POST", "/select-profile", data=self.profile, headers={"Content-Type": "text/plain"})
@@ -138,6 +192,34 @@ class ArmadilloConnection(DSConnection):
         response = self._send(method, path, **kwargs)
         raise_for_error(response)
         return response
+
+
+class ArmadilloResult(DSResult):
+    def __init__(self, conn: ArmadilloConnection, pending: bool, result: object = None):
+        self.conn = conn
+        self.pending = pending
+        self.result = result
+
+    def is_completed(self) -> bool:
+        if not self.pending:
+            return True
+        return self.conn.read_last_command()["status"] in FINISHED_STATUSES
+
+    def fetch(self) -> object:
+        if not self.pending:
+            return self.result
+        command = self._wait_for_last_command()
+        self.conn.raise_if_command_failed(command)
+        self.result = self.conn.read_last_result() if command["withResult"] else None
+        self.pending = False
+        return self.result
+
+    def _wait_for_last_command(self) -> dict:
+        while True:
+            command = self.conn.read_last_command()
+            if command["status"] in FINISHED_STATUSES:
+                return command
+            time.sleep(POLL_INTERVAL_SECONDS)
 
 
 class ArmadilloDriver(DSDriver):
@@ -162,6 +244,23 @@ def open_http_session(args: DSLoginInfo) -> requests.Session:
 def raise_for_error(response: requests.Response) -> None:
     if not response.ok:
         raise ArmadilloDSError(read_error_message(response), response.status_code, response.text)
+
+
+def read_json_body(response: requests.Response) -> object:
+    return response.json() if response.content else None
+
+
+def describe_failed_command(command: dict, server: str) -> str:
+    return f"Command '{command.get('expression')}' failed on {server}: {read_command_message(command)}"
+
+
+def read_command_message(command: dict) -> str:
+    message = command.get("message") or "<no message>"
+    embedded = re.search(r"\{.*\}", message, re.DOTALL)
+    if embedded:
+        with suppress(ValueError, KeyError, TypeError):
+            return json.loads(embedded.group())["message"]
+    return message
 
 
 def read_error_message(response: requests.Response) -> str:

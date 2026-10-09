@@ -3,7 +3,7 @@ import responses
 from datashield.interface import DSLoginInfo
 from responses import matchers
 
-from datashield_armadillo import ArmadilloDriver
+from datashield_armadillo import ArmadilloDriver, impl
 from datashield_armadillo.impl import ArmadilloDSError
 
 URL = "https://armadillo.example.org"
@@ -136,3 +136,125 @@ def test_disconnect_logs_out_and_ends_session():
     conn.disconnect()
     assert logout.call_count == 1
     assert session.is_terminated()
+
+
+def connect_with_session():
+    conn = connect()
+    responses.post(f"{URL}/select-profile", status=204)
+    return conn
+
+
+def last_command(status, with_result=True, message=None):
+    return {"expression": "meanDS(D$age)", "status": status, "withResult": with_result, "message": message}
+
+
+@responses.activate
+def test_assign_table_loads_table_and_starts_session():
+    conn = connect_with_session()
+    params = {"symbol": "D", "table": "project/folder/table", "variables": "age,sex", "async": "true"}
+    load = responses.post(f"{URL}/load-table", status=201, match=[matchers.query_param_matcher(params)])
+    conn.assign_table("D", "project/folder/table", variables=["age", "sex"], missings=True, id_name="id")
+    assert load.call_count == 1
+    assert conn.has_session()
+
+
+@responses.activate
+def test_assign_resource_loads_resource():
+    conn = connect_with_session()
+    params = {"symbol": "res", "resource": "project/folder/resource", "async": "true"}
+    load = responses.post(f"{URL}/load-resource", status=201, match=[matchers.query_param_matcher(params)])
+    conn.assign_resource("res", "project/folder/resource")
+    assert load.call_count == 1
+
+
+@responses.activate
+def test_assign_expr_posts_expression():
+    conn = connect_with_session()
+    assign = responses.post(f"{URL}/symbols/x", status=201, match=[matchers.body_matcher("c(1, 2)")])
+    conn.assign_expr("x", "c(1, 2)")
+    assert assign.call_count == 1
+
+
+@responses.activate
+def test_assign_result_has_no_value():
+    conn = connect_with_session()
+    responses.post(f"{URL}/symbols/x", status=201)
+    responses.get(f"{URL}/lastcommand", json=last_command("COMPLETED", with_result=False))
+    result = conn.assign_expr("x", "c(1, 2)")
+    assert result.is_completed()
+    assert result.fetch() is None
+
+
+@responses.activate
+def test_aggregate_asks_for_json():
+    conn = connect_with_session()
+    responses.post(f"{URL}/execute", status=201)
+    conn.aggregate("meanDS(D$age)")
+    request = responses.calls[-1].request
+    assert request.headers["Accept"] == "application/json"
+    assert request.body == b"meanDS(D$age)"
+
+
+@responses.activate
+def test_aggregate_result_is_fetched_once_completed():
+    conn = connect_with_session()
+    responses.post(f"{URL}/execute", status=201)
+    responses.get(f"{URL}/lastcommand", json=last_command("IN_PROGRESS"))
+    responses.get(f"{URL}/lastcommand", json=last_command("COMPLETED"))
+    responses.get(f"{URL}/lastresult", json={"EstimatedMean": 36.6})
+    result = conn.aggregate("meanDS(D$age)")
+    assert not result.is_completed()
+    assert result.is_completed()
+    assert result.fetch() == {"EstimatedMean": 36.6}
+    assert responses.calls[-1].request.headers["Accept"] == "application/json"
+
+
+@responses.activate
+def test_fetch_waits_for_command_to_finish(monkeypatch):
+    monkeypatch.setattr(impl, "POLL_INTERVAL_SECONDS", 0)
+    conn = connect_with_session()
+    responses.post(f"{URL}/execute", status=201)
+    responses.get(f"{URL}/lastcommand", json=last_command("PENDING"))
+    responses.get(f"{URL}/lastcommand", json=last_command("IN_PROGRESS"))
+    responses.get(f"{URL}/lastcommand", json=last_command("COMPLETED"))
+    responses.get(f"{URL}/lastresult", json=[1, 2, 3])
+    assert conn.aggregate("meanDS(D$age)").fetch() == [1, 2, 3]
+
+
+@responses.activate
+def test_synchronous_aggregate_returns_result_without_polling():
+    conn = connect_with_session()
+    params = {"async": "false"}
+    responses.post(f"{URL}/execute", json={"EstimatedMean": 36.6}, match=[matchers.query_param_matcher(params)])
+    result = conn.aggregate("meanDS(D$age)", asynchronous=False)
+    assert result.is_completed()
+    assert result.fetch() == {"EstimatedMean": 36.6}
+
+
+@responses.activate
+def test_fetch_raises_message_of_failed_command():
+    conn = connect_with_session()
+    responses.post(f"{URL}/execute", status=201)
+    message = '500 Internal Server Error: "{"status":"BAD_REQUEST","message":"object not found"}"'
+    responses.get(f"{URL}/lastcommand", json=last_command("FAILED", message=message))
+    result = conn.aggregate("meanDS(D$age)")
+    with pytest.raises(ArmadilloDSError, match=r"Command 'meanDS\(D\$age\)' failed on server1: object not found"):
+        result.fetch()
+
+
+@responses.activate
+def test_synchronous_failure_raises_message_of_failed_command():
+    conn = connect_with_session()
+    responses.post(f"{URL}/execute", status=500)
+    responses.get(f"{URL}/lastcommand", json=last_command("FAILED", message="object not found"))
+    with pytest.raises(ArmadilloDSError, match="failed on server1: object not found"):
+        conn.aggregate("meanDS(D$age)", asynchronous=False)
+
+
+@responses.activate
+def test_assign_table_raises_server_message_for_unknown_table():
+    conn = connect_with_session()
+    responses.post(f"{URL}/load-table", status=404, json={"message": "Project 'project' has no object 'x'"})
+    with pytest.raises(ArmadilloDSError, match="has no object") as raised:
+        conn.assign_table("D", "project/folder/x")
+    assert raised.value.code == 404
