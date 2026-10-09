@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "datashield-armadillo"
+version = "0.1.0"
+description = "DataSHIELD Interface implementation for MOLGENIS Armadillo"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["datashield", "molgenis", "armadillo"]
+authors = [
+  { name = "Tim Cadman", email = "t.j.cadman@umcg.nl" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "datashield>=0.5.1",
+  "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0",
+  "ruff>=0.4.0",
+]
+
+[project.urls]
+Documentation = "https://github.com/molgenis/datashield-armadillo-python#readme"
+Issues = "https://github.com/molgenis/datashield-armadillo-python/issues"
+Source = "https://github.com/molgenis/datashield-armadillo-python"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.coverage.run]
+source_pkgs = ["datashield_armadillo", "tests"]
+branch = true
+parallel = true
+
+[tool.coverage.paths]
+datashield_armadillo = ["src/datashield_armadillo", "*/datashield-armadillo-python/src/datashield_armadillo"]
+tests = ["tests", "*/datashield-armadillo-python/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/datashield_armadillo"]
